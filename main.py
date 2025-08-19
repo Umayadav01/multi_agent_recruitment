@@ -178,6 +178,20 @@ def page_assessments(assess):
                     title="Rubric Weights"
                 )
                 st.plotly_chart(fig, use_container_width=True)
+def normalize_skills(c):
+    """Safely extract skill names as clean strings from candidate dict."""
+    cleaned = []
+    for s in (c.get("skills") or []):
+        if isinstance(s, str):
+            cleaned.append(s.title().strip())
+        elif isinstance(s, dict):
+            # in case skill is like {"name": "Python"}
+            name = s.get("name")
+            if isinstance(name, str):
+                cleaned.append(name.title().strip())
+        # ignore anything else (numbers, None, etc.)
+    return cleaned
+
 
 def page_behavioral(beh):
     st.subheader("Behavioral Insights")
