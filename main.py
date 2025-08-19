@@ -63,10 +63,18 @@ def compute_kpis(cands: list[dict]):
     kpi["total_candidates"] = len(cands)
     exp_vals = [c.get("experience") for c in cands if isinstance(c.get("experience"), (int, float))]
     kpi["avg_experience"] = round(sum(exp_vals)/len(exp_vals), 1) if exp_vals else 0
-    all_skills = [s.strip() for c in cands for s in (c.get("skills") or [])]
-    common = Counter([s.title() for s in all_skills]).most_common(1)
+    
+    # handle messy skills
+    all_skills = []
+    for c in cands:
+        for s in (c.get("skills") or []):
+            if isinstance(s, str):
+                all_skills.append(s.strip().title())
+    
+    common = Counter(all_skills).most_common(1)
     kpi["top_skill"] = common[0][0] if common else "—"
     return kpi
+
 
 # ---------- UI Pieces ----------
 def header_kpis(kpi: dict):
