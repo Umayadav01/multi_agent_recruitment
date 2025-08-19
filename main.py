@@ -1,278 +1,206 @@
 # main.py
-import os, json, re
-from pathlib import Path
-from collections import Counter, defaultdict
 import streamlit as st
+import json
+from pathlib import Path
+from typing import Dict
 import pandas as pd
 import plotly.express as px
 
-# ---------- Paths (relative to repo root) ----------
-DIR = Path(__file__).parent
-REPORTS_DIR = DIR / "outputs" / "reports"
-CANDIDATE_JSON_DIR = REPORTS_DIR
-ASSESS_DIR = DIR / "outputs" / "assessments"
-BEHAV_DIR = REPORTS_DIR / "behavioral"
-MARKET_DIR = REPORTS_DIR / "market"
-PDF_DIR = REPORTS_DIR / "pdfs"
+# ---------------- PATHS ----------------
+ROOT = Path(".")
+REPORTS_DIR = ROOT / "outputs" / "reports"
+ASSESSMENTS_DIR = ROOT / "outputs" / "assessments"
 
-# ---------- Helpers ----------
-def _safe_glob(dir_path: Path, pattern: str):
-    if not dir_path.exists():
-        return []
-    return sorted(dir_path.glob(pattern))
-
-@st.cache_data(show_spinner=False)
-def load_json_folder(folder: Path) -> list[dict]:
-    data = []
-    for p in _safe_glob(folder, "*.json"):
+# ---------------- HELPERS ----------------
+def load_json_files(directory: Path) -> Dict[str, Dict]:
+    out = {}
+    if not directory.exists():
+        return out
+    for f in sorted(directory.glob("*.json")):
         try:
-            with p.open("r", encoding="utf-8") as f:
-                obj = json.load(f)
-                obj["_source_file"] = str(p.relative_to(DIR))
-                data.append(obj)
-        except Exception as e:
-            st.warning(f"Could not read {p.name}: {e}")
-    return data
+            out[f.stem] = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+    return out
 
-@st.cache_data(show_spinner=False)
-def load_candidates():
-    # Candidate reports live directly under outputs/reports/*.json
-    # but exclude subfolders like behavioral/ market/
-    files = [p for p in _safe_glob(CANDIDATE_JSON_DIR, "*.json")
-             if p.parent == CANDIDATE_JSON_DIR]
-    data = []
-    for p in files:
+def aggregate_skills(candidate_reports: Dict[str, Dict]) -> pd.DataFrame:
+    rows = []
+    for key, rep in candidate_reports.items():
+        for skill, conf in rep.get("skills", []):
+            rows.append({"candidate": key, "skill": skill, "confidence": float(conf)})
+    if not rows:
+        return pd.DataFrame(columns=["skill", "count", "avg_conf"])
+    df = pd.DataFrame(rows)
+    agg = df.groupby("skill").agg(
+        count=("candidate", "nunique"),
+        avg_conf=("confidence", "mean")
+    ).reset_index().sort_values("count", ascending=False)
+    return agg
+
+def salary_distribution_df(market_reports: Dict[str, Dict]) -> pd.DataFrame:
+    rows = []
+    for k, rep in market_reports.items():
         try:
-            with p.open("r", encoding="utf-8") as f:
-                obj = json.load(f)
-                obj["_source_file"] = str(p.relative_to(DIR))
-                # normalize a few common fields
-                obj["name"] = obj.get("name") or p.stem.replace("_", " ")
-                obj["title"] = obj.get("title") or obj.get("role") or "Candidate"
-                obj["skills"] = obj.get("skills") or obj.get("top_skills") or []
-                obj["experience"] = obj.get("experience") or obj.get("years_experience") or None
-                obj["career_summary"] = obj.get("career_summary") or obj.get("highlights") or []
-                data.append(obj)
-        except Exception as e:
-            st.warning(f"Could not read {p.name}: {e}")
-    return data
+            rows.append({
+                "role": rep.get("role", k),
+                "avg_salary": float(rep.get("avg_salary", 0)),
+                "demand_index": rep.get("demand_index", 0)
+            })
+        except:
+            continue
+    return pd.DataFrame(rows)
 
-# ---------- KPIs ----------
-def compute_kpis(cands: list[dict]):
-    kpi = {}
-    kpi["total_candidates"] = len(cands)
-    exp_vals = [c.get("experience") for c in cands if isinstance(c.get("experience"), (int, float))]
-    kpi["avg_experience"] = round(sum(exp_vals)/len(exp_vals), 1) if exp_vals else 0
-    
-    # handle messy skills
-    all_skills = []
-    for c in cands:
-        for s in (c.get("skills") or []):
-            if isinstance(s, str):
-                all_skills.append(s.strip().title())
-    
-    common = Counter(all_skills).most_common(1)
-    kpi["top_skill"] = common[0][0] if common else "—"
-    return kpi
+# ---------------- UI RENDERERS ----------------
+def show_candidate(rep: Dict, assessment_reports: Dict, behavioral_reports: Dict):
+    c = rep.get("candidate", {})
+    st.subheader("👤 Candidate Overview")
+    st.write(f"**Name:** {c.get('name','-')}")
+    st.write(f"**Role:** {c.get('role','-')}")
+    st.write(f"**Experience:** {c.get('experience_years','-')} years")
 
+    st.markdown("### 💡 Career Summary")
+    st.write(rep.get("career_summary", "No summary available."))
 
-# ---------- UI Pieces ----------
-def header_kpis(kpi: dict):
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Candidates", kpi["total_candidates"])
-    c2.metric("Avg Experience (yrs)", kpi["avg_experience"])
-    c3.metric("Most Common Skill", kpi["top_skill"])
+    st.markdown("### 🛠 Skills")
+    for skill, conf in rep.get("skills", []):
+        display_conf = float(conf)
+        if display_conf > 1:
+            display_conf /= 100.0
+        st.write(f"- **{skill}** ({conf:.2f})")
+        st.progress(min(max(display_conf, 0.0), 1.0))
 
-def page_overview(cands, market):
-    st.subheader("System Overview")
-    st.markdown("""
-This dashboard surfaces results generated by a **Multi-Agent Recruitment System**:
-- **Candidate Profiler** → skills & career insights  
-- **Assessment Designer** → tailored challenges + rubric  
-- **Behavioral Analyzer** → soft-skill themes & sentiment  
-- **Market Intelligence** → in-demand skills & salary trends  
-""")
-    header_kpis(compute_kpis(cands))
+    st.markdown("### ⭐ Highlights")
+    for h in rep.get("highlights", []):
+        st.write(f"- {h}")
 
-    # Skills distribution
-    all_skills = [s.title() for c in cands for s in (c.get("skills") or [])]
-    if all_skills:
-        counts = pd.Series(all_skills).value_counts().reset_index()
-        counts.columns = ["Skill", "Count"]
-        fig = px.bar(counts, x="Skill", y="Count", title="Top Skills Across Candidates")
+    # linked assessment
+    ass_key = Path(rep.get("_source_file", "")).stem + "_assessment"
+    if ass_key in assessment_reports:
+        st.divider()
+        st.subheader("📝 Assessment Package")
+        ass = assessment_reports[ass_key]
+        for ch in ass.get("challenges", []):
+            st.write(f"- {ch}")
+        st.write("**Evaluation Framework**")
+        st.json(ass.get("evaluation_framework", {}))
+        st.write("**Bias Mitigation**")
+        for g in ass.get("bias_mitigation", []):
+            st.write(f"- {g}")
+
+    # linked behavioral
+    beh_key = Path(rep.get("_source_file", "")).stem + "_behavior"
+    if beh_key in behavioral_reports:
+        st.divider()
+        st.subheader("💬 Behavioral Analysis")
+        beh = behavioral_reports[beh_key]
+        for k, v in beh.get("themes", {}).items():
+            st.write(f"- {k}: {v}")
+        st.write("**Summary:**", beh.get("summary", "-"))
+
+def show_market(rep: Dict, market_df: pd.DataFrame):
+    st.subheader(f"📊 Market Intelligence — {rep.get('role','-')}")
+    st.write(f"- **Average Salary**: {rep.get('avg_salary','-')}")
+    st.write(f"- **Demand Index**: {rep.get('demand_index','-')}")
+    st.markdown("**Recommendations**")
+    for r in rep.get("recommendations", []):
+        st.write(f"- {r}")
+
+    # scatter plot of all roles
+    if not market_df.empty:
+        fig = px.scatter(
+            market_df,
+            x="avg_salary", y="demand_index",
+            text="role", size="demand_index",
+            title="Demand vs Salary across roles"
+        )
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No skills found in candidate JSONs yet.")
 
-    # Market snapshot (optional)
-    if market:
-        df = pd.DataFrame(market)
-        if set(["skill", "demand"]).issubset(df.columns):
-            fig2 = px.bar(df, x="skill", y="demand", title="Market Demand by Skill")
+# ---------------- MAIN APP ----------------
+def main():
+    st.set_page_config(page_title="Multi-Agent Recruitment Dashboard", layout="wide")
+    st.title("🤖 Multi-Agent Recruitment System — Dashboard")
+
+    # load all outputs
+    candidate_reports = load_json_files(REPORTS_DIR)
+    assessment_reports = load_json_files(ASSESSMENTS_DIR)
+    behavioral_reports = load_json_files(REPORTS_DIR / "behavioral")
+    market_reports = load_json_files(REPORTS_DIR / "market")
+
+    # sidebar navigation
+    st.sidebar.header("Navigation")
+    section = st.sidebar.radio(
+        "Choose Section:",
+        ["📌 Overview", "👤 Candidates", "📊 Market Trends", "📂 Exports / Utilities"]
+    )
+
+    if section == "📌 Overview":
+        st.header("System Overview")
+        st.info("This dashboard visualizes outputs from the multi-agent recruitment pipeline.")
+        # metrics
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Candidates", len(candidate_reports))
+        col2.metric("Assessments", len(assessment_reports))
+        col3.metric("Behavioral Reports", len(behavioral_reports))
+        col4.metric("Market Reports", len(market_reports))
+
+        # skill distribution
+        skill_df = aggregate_skills(candidate_reports)
+        if not skill_df.empty:
+            fig = px.bar(skill_df.head(12), x="count", y="skill", orientation="h",
+                         title="Top 12 Skills (by candidates)")
+            st.plotly_chart(fig, use_container_width=True)
+
+        # salary vs demand
+        market_df = salary_distribution_df(market_reports)
+        if not market_df.empty:
+            fig2 = px.bar(market_df, x="role", y="avg_salary", color="demand_index",
+                          title="Salary vs Demand Index")
             st.plotly_chart(fig2, use_container_width=True)
 
-def page_candidates(cands):
-    st.subheader("Candidate Profiles")
-    if not cands:
-        st.info("No candidate JSONs found in outputs/reports/.")
-        return
+    elif section == "👤 Candidates":
+        if not candidate_reports:
+            st.warning("No candidate reports found. Run pipeline first.")
+            return
+        choice = st.selectbox("Select Candidate", sorted(candidate_reports.keys()))
+        if choice:
+            rep = candidate_reports[choice]
+            rep["_source_file"] = str(REPORTS_DIR / f"{choice}.json")
+            show_candidate(rep, assessment_reports, behavioral_reports)
 
-    # filter/search
-    all_skills = sorted({s.title() for c in cands for s in (c.get("skills") or [])})
-    col1, col2 = st.columns([2,1])
-    q = col1.text_input("Search name/title")
-    pick = col2.multiselect("Filter by skills", all_skills, max_selections=5)
+    elif section == "📊 Market Trends":
+        if not market_reports:
+            st.warning("No market reports found.")
+            return
+        roles = sorted(market_reports.keys())
+        choice = st.selectbox("Select Role", roles)
+        if choice:
+            rep = market_reports[choice]
+            market_df = salary_distribution_df(market_reports)
+            show_market(rep, market_df)
 
-    def matches(c):
-        ok = True
-        if q:
-            s = f"{c.get('name','')} {c.get('title','')}".lower()
-            ok = q.lower() in s
-        if ok and pick:
-            ok = set(s.title() for s in (c.get("skills") or [])) >= set(pick)
-        return ok
-
-    for c in filter(matches, cands):
-        with st.expander(f"👤 {c.get('name','Unknown')} — {c.get('title','')}", expanded=False):
-            left, right = st.columns([2,1])
-            left.write(f"**Experience:** {c.get('experience','N/A')} years")
-            skills = [s.title() for s in (c.get("skills") or [])]
-            left.write("**Skills:** " + (", ".join(skills) if skills else "—"))
-            left.write("**Source file:** `" + c.get('_source_file','') + "`")
-            if c.get("career_summary"):
-                left.markdown("**Career Summary:**")
-                for step in c["career_summary"]:
-                    left.markdown(f"- {step}")
-
-            # small skill chart per candidate
-            if skills:
-                df = pd.DataFrame({"Skill": skills})
-                df = df.value_counts().reset_index(name="Count")
-                fig = px.bar(df, x="Skill", y="Count", title="Skill Emphasis")
-                right.plotly_chart(fig, use_container_width=True)
-
-def page_assessments(assess):
-    st.subheader("Technical Assessments")
-    if not assess:
-        st.info("No assessment JSONs found in outputs/assessments/.")
-        return
-    for a in assess:
-        cand = a.get("candidate") or a.get("name") or "Candidate"
-        with st.expander(f"📝 Assessment — {cand}"):
-            qs = a.get("questions") or a.get("challenges") or []
-            rubric = a.get("rubric") or a.get("evaluation") or {}
-            if qs:
-                st.markdown("**Challenges:**")
-                for q in qs:
-                    st.markdown(f"- {q}")
-            else:
-                st.write("_No challenge list found in JSON_")
-            st.markdown("**Rubric:**")
-            st.json(rubric)
-            # visualize weights if numeric
-            weights = {k: v for k, v in rubric.items() if isinstance(v, (int, float))}
-            if weights:
-                fig = px.pie(
-                    names=list(weights.keys()),
-                    values=list(weights.values()),
-                    title="Rubric Weights"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-def normalize_skills(c):
-    """Safely extract skill names as clean strings from candidate dict."""
-    cleaned = []
-    for s in (c.get("skills") or []):
-        if isinstance(s, str):
-            cleaned.append(s.title().strip())
-        elif isinstance(s, dict):
-            # in case skill is like {"name": "Python"}
-            name = s.get("name")
-            if isinstance(name, str):
-                cleaned.append(name.title().strip())
-        # ignore anything else (numbers, None, etc.)
-    return cleaned
-
-
-def page_behavioral(beh):
-    st.subheader("Behavioral Insights")
-    if not beh:
-        st.info("No behavioral JSONs found in outputs/reports/behavioral/.")
-        return
-    for b in beh:
-        cand = b.get("candidate") or b.get("name") or "Candidate"
-        with st.expander(f"💬 {cand}"):
-            strengths = b.get("strengths") or b.get("positives") or []
-            themes = b.get("themes") or b.get("keywords") or []
-            st.write("**Strengths:** " + (", ".join(strengths) if strengths else "—"))
-            st.write("**Themes:** " + (", ".join(themes) if themes else "—"))
-    # crude sentiment pie if present
-    agg = defaultdict(int)
-    for b in beh:
-        dist = b.get("sentiment") or {}
-        for k, v in dist.items():
-            if isinstance(v, (int, float)): agg[k] += v
-    if agg:
-        fig = px.pie(names=list(agg.keys()), values=list(agg.values()),
-                     title="Aggregate Sentiment")
-        st.plotly_chart(fig, use_container_width=True)
-
-def page_market(market):
-    st.subheader("Market Intelligence")
-    if not market:
-        st.info("No market JSONs found in outputs/reports/market/.")
-        return
-    df = pd.DataFrame(market)
-    # attempt standard columns
-    if set(["skill", "demand"]).issubset(df.columns):
-        fig = px.bar(df, x="skill", y="demand", title="Demand by Skill")
-        st.plotly_chart(fig, use_container_width=True)
-    if set(["year", "salary", "skill"]).issubset(df.columns):
-        fig2 = px.line(df, x="year", y="salary", color="skill", title="Salary Benchmarks")
-        st.plotly_chart(fig2, use_container_width=True)
-    st.dataframe(df, use_container_width=True)
-
-def page_reports():
-    st.subheader("Generated Reports (PDF)")
-    pdfs = _safe_glob(PDF_DIR, "*.pdf")
-    if not pdfs:
-        st.info("No PDFs found in outputs/reports/pdfs/.")
-        return
-    for p in pdfs:
-        with p.open("rb") as f:
+    else:  # 📂 Exports
+        st.header("Exports & Utilities")
+        skill_df = aggregate_skills(candidate_reports)
+        if not skill_df.empty:
             st.download_button(
-                label=f"📥 Download {p.name}",
-                data=f.read(),
-                file_name=p.name,
-                mime="application/pdf"
+                "Download skill-frequency CSV",
+                skill_df.to_csv(index=False),
+                "skill_frequency.csv",
+                "text/csv"
             )
+            st.dataframe(skill_df.head(20))
+        market_df = salary_distribution_df(market_reports)
+        if not market_df.empty:
+            st.download_button(
+                "Download market CSV",
+                market_df.to_csv(index=False),
+                "market_data.csv",
+                "text/csv"
+            )
+            st.dataframe(market_df)
 
-# ---------- App ----------
-st.set_page_config(page_title="Multi-Agent Recruitment System", layout="wide")
-st.title("🤖 Multi-Agent Recruitment Dashboard")
+        st.markdown("ℹ️ To regenerate outputs after updating `data/`, run locally:")
+        st.code("python -m app.main", language="bash")
 
-# Load once
-with st.spinner("Loading data..."):
-    candidates = load_candidates()
-    assessments = load_json_folder(ASSESS_DIR)
-    behavioral = load_json_folder(BEHAV_DIR)
-    market = load_json_folder(MARKET_DIR)
-
-# Sidebar
-page = st.sidebar.radio(
-    "Choose Section",
-    ["📌 Overview", "👤 Candidates", "📝 Assessments", "💬 Behavioral Analysis", "📊 Market Trends", "📂 Reports"]
-)
-
-# Route
-if page == "📌 Overview":
-    page_overview(candidates, market)
-elif page == "👤 Candidates":
-    page_candidates(candidates)
-elif page == "📝 Assessments":
-    page_assessments(assessments)
-elif page == "💬 Behavioral Analysis":
-    page_behavioral(behavioral)
-elif page == "📊 Market Trends":
-    page_market(market)
-else:
-    page_reports()
+if __name__ == "__main__":
+    main()
