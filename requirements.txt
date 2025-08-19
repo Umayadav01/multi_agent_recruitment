@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+streamlit
+pandas
+numpy
+scikit-learn
+spacy
+sentence-transformers
+transformers
+matplotlib
+plotly
+faker
+reportlab

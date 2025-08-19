@@ -1,0 +1,10 @@
+{
+  "role": "Data Scientist",
+  "avg_salary": 84607,
+  "demand_index": 5,
+  "recommendations": [
+    "↔️ Demand for Data Scientist is moderate; continue sourcing steadily.",
+    "Recommended sourcing channels: LinkedIn, GitHub, Kaggle, StackOverflow"
+  ],
+  "notes": "Market analysis performed on synthetic data."
+}

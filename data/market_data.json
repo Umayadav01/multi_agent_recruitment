@@ -1,0 +1,57 @@
+[
+  {
+    "role": "Data Scientist",
+    "avg_salary": 103393,
+    "demand_index": 8,
+    "top_sources": [
+      "LinkedIn",
+      "GitHub",
+      "Kaggle",
+      "StackOverflow"
+    ]
+  },
+  {
+    "role": "Data Scientist",
+    "avg_salary": 127532,
+    "demand_index": 8,
+    "top_sources": [
+      "LinkedIn",
+      "GitHub",
+      "Kaggle",
+      "StackOverflow"
+    ]
+  },
+  {
+    "role": "Full Stack Developer",
+    "avg_salary": 103438,
+    "demand_index": 6,
+    "top_sources": [
+      "LinkedIn",
+      "GitHub",
+      "Kaggle",
+      "StackOverflow"
+    ]
+  },
+  {
+    "role": "Data Scientist",
+    "avg_salary": 116981,
+    "demand_index": 7,
+    "top_sources": [
+      "LinkedIn",
+      "GitHub",
+      "Kaggle",
+      "StackOverflow"
+    ]
+  },
+  {
+    "role": "Data Scientist",
+    "avg_salary": 84607,
+    "demand_index": 5,
+    "top_sources": [
+      "LinkedIn",
+      "GitHub",
+      "Kaggle",
+      "StackOverflow"
+    ]
+  }
+]
